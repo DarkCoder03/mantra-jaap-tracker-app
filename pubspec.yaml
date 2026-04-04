@@ -1,0 +1,57 @@
+name: mantra_jaap_tracker
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.8
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.5+1
+  shared_preferences: ^2.5.5
+  intl: ^0.20.2
+  audioplayers: ^6.6.0
+  vibration: ^3.1.8
+  file_picker: ^10.3.10
+  path_provider: ^2.1.5
+  phosphor_flutter: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+
+  uses-material-design: true
+  assets:
+      - assets/logo.png
+      - assets/sounds/
+
+  fonts:
+      - family: CormorantGaramond
+        fonts:
+          - asset: assets/fonts/CormorantGaramond-Regular.ttf
+          - asset: assets/fonts/CormorantGaramond-SemiBold.ttf
+            weight: 600
+      - family: Inter
+        fonts:
+          - asset: assets/fonts/Inter-Regular.ttf
+          - asset: assets/fonts/Inter-Medium.ttf
+            weight: 500
+          - asset: assets/fonts/Inter-SemiBold.ttf
+            weight: 600
+
+
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/logo.png"
+  adaptive_icon_background: "#F7F7F8"
+  adaptive_icon_foreground: "assets/logo.png"

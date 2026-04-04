@@ -1,0 +1,16 @@
+.dart_tool/
+.packages
+.pub/
+build/
+.idea/
+.vscode/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/ephemeral/
+.DS_Store
+.env
+.env.*
