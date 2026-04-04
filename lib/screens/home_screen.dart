@@ -72,9 +72,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final first = DateTime(m.year, m.month, 1);
     final last = DateTime(m.year, m.month + 1, 0);
     final out = <DateTime?>[];
-    for (int i = 0; i < first.weekday % 7; i++) out.add(null);
-    for (int d = 1; d <= last.day; d++) out.add(DateTime(m.year, m.month, d));
-    while (out.length % 7 != 0) out.add(null);
+    for (int i = 0; i < first.weekday % 7; i++) {
+      out.add(null);
+    }
+    for (int d = 1; d <= last.day; d++) {
+      out.add(DateTime(m.year, m.month, d));
+    }
+    while (out.length % 7 != 0) {
+      out.add(null);
+    }
     return out;
   }
 

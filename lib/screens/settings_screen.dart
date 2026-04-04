@@ -41,7 +41,7 @@ class SettingsScreen extends StatelessWidget {
 
           const _FieldLabel("Theme shade"),
           DropdownButtonFormField<AppThemeMode>(
-            value: sp.themeMode,
+            initialValue: sp.themeMode,
             decoration: _inputDec(border, cardBg),
             items: const [
               DropdownMenuItem(value: AppThemeMode.system, child: Text("System")),
@@ -64,7 +64,7 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 12),
           const _FieldLabel("Sound type"),
           DropdownButtonFormField<String>(
-            value: sp.soundType,
+            initialValue: sp.soundType,
             decoration: _inputDec(border, cardBg),
             items: const [
               DropdownMenuItem(value: 'bell', child: Text('Bell')),
@@ -81,7 +81,7 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 12),
           const _FieldLabel("Colour theme"),
           DropdownButtonFormField<String>(
-            value: sp.primaryThemeKey,
+            initialValue: sp.primaryThemeKey,
             decoration: _inputDec(border, cardBg),
             items: const [
               DropdownMenuItem(value: 'amber', child: Text('Amber')),
@@ -100,7 +100,7 @@ class SettingsScreen extends StatelessWidget {
 
           const _FieldLabel("Counter color"),
           DropdownButtonFormField<String>(
-            value: sp.counterColorKey,
+            initialValue: sp.counterColorKey,
             decoration: _inputDec(border, cardBg),
             items: const [
               DropdownMenuItem(value: 'amber', child: Text('Kesari (Amber)')),
