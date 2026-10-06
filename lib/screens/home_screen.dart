@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:provider/provider.dart';
+import '../models/mantra_icon.dart';
 import '../providers/counter_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/backup_service.dart';
+import '../theme/app_theme.dart';
+import '../utils/date_utils.dart';
+import '../utils/streak.dart';
+import '../widgets/app_ui.dart';
+import '../widgets/counter_avatar.dart';
+import '../widgets/counter_editor_sheet.dart';
+import '../widgets/progress_ring.dart';
 import 'counter_screen.dart';
-import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,482 +21,722 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _asked = false;
-  DateTime _currentMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
-  final GlobalKey _menuAnchorKey = GlobalKey();
-
-  static const _dotPalette = [
-    Color(0xFF14B8A6),
-    Color(0xFFA855F7),
-    Color(0xFFF43F5E),
-    Color(0xFF2563EB),
-    Color(0xFFD97706),
-    Color(0xFF16A34A),
-    Color(0xFF0EA5E9),
-    Color(0xFF84CC16),
-  ];
+  bool _askedForFirstCounter = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_asked) return;
-    _asked = true;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final cp = context.read<CounterProvider>();
-      if (cp.counters.isEmpty) {
-        final name = await _askText("Create your first counter", hint: "Counter name");
-        if (name != null && name.trim().isNotEmpty) {
-          await cp.ensureFirstCounter(name.trim());
-          if (mounted) setState(() {});
-        }
+    if (_askedForFirstCounter) return;
+    _askedForFirstCounter = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && context.read<CounterProvider>().counters.isEmpty) {
+        _createCounter(first: true);
       }
     });
   }
 
-  Future<String?> _askText(String title, {String hint = "Enter text", String initial = ""}) async {
-    final c = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          decoration: InputDecoration(hintText: hint),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-          FilledButton(onPressed: () => Navigator.pop(context, c.text), child: const Text("Save")),
-        ],
-      ),
+  void _openDay(DateTime day) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => CounterScreen(date: day)));
+  }
+
+  Future<void> _createCounter({bool first = false}) async {
+    final cp = context.read<CounterProvider>();
+    final sp = context.read<SettingsProvider>();
+    final draft = await showCounterEditor(
+      context,
+      cycleSize: sp.cycleSize,
+      suggestedColor: cp.nextColor(),
+      title: first ? 'Create your first counter' : null,
+    );
+    if (draft == null) return;
+    await cp.addCounter(
+      draft.name,
+      iconId: draft.iconId,
+      color: draft.color,
+      dailyGoalCycles: draft.dailyGoalCycles,
+      customGlyph: draft.customGlyph,
     );
   }
 
-  List<DateTime?> _monthCells(DateTime m) {
-    final first = DateTime(m.year, m.month, 1);
-    final last = DateTime(m.year, m.month + 1, 0);
-    final out = <DateTime?>[];
-    for (int i = 0; i < first.weekday % 7; i++) {
-      out.add(null);
-    }
-    for (int d = 1; d <= last.day; d++) {
-      out.add(DateTime(m.year, m.month, d));
-    }
-    while (out.length % 7 != 0) {
-      out.add(null);
-    }
-    return out;
+  Future<void> _editCounter(CounterProfile counter) async {
+    final cp = context.read<CounterProvider>();
+    final draft = await showCounterEditor(
+      context,
+      cycleSize: context.read<SettingsProvider>().cycleSize,
+      initial: counter,
+    );
+    if (draft == null) return;
+    await cp.updateCounter(
+      counter.id,
+      name: draft.name,
+      iconId: draft.iconId,
+      color: draft.color,
+      dailyGoalCycles: draft.dailyGoalCycles,
+      customGlyph: draft.customGlyph,
+    );
   }
 
-  String _iso(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+  Future<void> _deleteCounter(CounterProfile counter) async {
+    final cp = context.read<CounterProvider>();
+    final ok = await showConfirmDialog(
+      context,
+      title: 'Delete ${counter.name}?',
+      message: 'All of its chanting history will be removed. This can\'t be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    );
+    if (ok) await cp.removeCounter(counter.id);
+  }
 
-  Future<void> _showCounterSwitcher(CounterProvider cp) async {
-    await showModalBottomSheet(
+  Future<void> _showCounterSwitcher() async {
+    // Each action closes the sheet first, then runs on the Home context.
+    final action = await showModalBottomSheet<(String, CounterProfile?)>(
       context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(12),
-          children: [
-            ...cp.counters.map(
-                  (c) => Card(
-                child: ListTile(
-                  title: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  leading: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        margin: const EdgeInsets.only(right: 10),
-                        decoration: BoxDecoration(
-                          color: _dotPalette[cp.counters.indexOf(c) % _dotPalette.length],
-                          shape: BoxShape.circle,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (ctx) => Consumer2<CounterProvider, SettingsProvider>(
+        builder: (ctx, cp, sp, _) {
+          final todayKey = isoDate(today());
+          return SheetScaffold(
+            title: 'Your counters',
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+              children: [
+                for (final c in cp.counters)
+                  ListTile(
+                    shape: const RoundedRectangleBorder(borderRadius: AppRadius.smAll),
+                    contentPadding: const EdgeInsets.only(left: AppSpacing.lg, right: AppSpacing.xs),
+                    selected: c.id == cp.activeCounter?.id,
+                    leading: CounterAvatar.of(c),
+                    title: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(
+                      '${c.countsByDate[todayKey] ?? 0} today, goal ${c.dailyGoalCycles} '
+                      '${c.dailyGoalCycles == 1 ? 'mala' : 'malas'}',
+                    ),
+                    onTap: () async {
+                      await cp.switchCounter(c.id);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Edit',
+                          icon: Icon(Icons.edit_outlined),
+                          onPressed: () => Navigator.pop(ctx, ('edit', c)),
                         ),
-                      ),
-                      Radio<String>(
-                        value: c.id,
-                        groupValue: cp.activeCounterId,
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          await cp.switchCounter(v);
-                          if (mounted) {
-                            setState(() {});
-                            Navigator.pop(context);
-                          }
-                        },
-                      ),
-                    ],
+                        IconButton(
+                          tooltip: cp.counters.length > 1 ? 'Delete' : 'You need at least one counter',
+                          icon: Icon(Icons.delete_outline_rounded),
+                          onPressed: cp.counters.length > 1 ? () => Navigator.pop(ctx, ('delete', c)) : null,
+                        ),
+                      ],
+                    ),
                   ),
-                  trailing: Wrap(
-                    spacing: 4,
-                    children: [
-                      IconButton(
-                        tooltip: 'Rename',
-                        onPressed: () async {
-                          final name = await _askText("Rename counter", initial: c.name);
-                          if (name != null && name.trim().isNotEmpty) {
-                            await cp.renameCounter(c.id, name.trim());
-                            if (mounted) setState(() {});
-                          }
-                        },
-                        icon: Icon(PhosphorIcons.pencilSimple()),
-                      ),
-                      IconButton(
-                        tooltip: 'Delete',
-                        onPressed: () async {
-                          await cp.removeCounter(c.id);
-                          if (mounted) setState(() {});
-                        },
-                        icon: Icon(PhosphorIcons.trash()),
-                      ),
-                    ],
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
+                  child: FilledButton.icon(
+                    onPressed: () => Navigator.pop(ctx, ('add', null)),
+                    icon: Icon(Icons.add_rounded),
+                    label: const Text('New counter'),
                   ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 8),
-            FilledButton.icon(
-              onPressed: () async {
-                final name = await _askText("Add counter", hint: "Counter name");
-                if (name != null && name.trim().isNotEmpty) {
-                  await cp.addCounter(name.trim());
-                  if (mounted) {
-                    setState(() {});
-                    Navigator.pop(context);
-                  }
-                }
-              },
-              icon: Icon(PhosphorIcons.plus()),
-              label: const Text("Add Counter"),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
-  }
 
-  Future<void> _showTopMenu(CounterProvider cp) async {
-    final rb = _menuAnchorKey.currentContext?.findRenderObject() as RenderBox?;
-    if (rb == null) return;
-    final off = rb.localToGlobal(Offset.zero);
-    final sz = rb.size;
-
-    final selected = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(off.dx, off.dy + sz.height + 6, off.dx + sz.width, 0),
-      items: [
-        PopupMenuItem(value: 'settings', child: Row(children: [Icon(PhosphorIcons.gear(), size: 18), const SizedBox(width: 8), const Text("General Settings")])),
-        PopupMenuItem(value: 'add', child: Row(children: [Icon(PhosphorIcons.plus(), size: 18), const SizedBox(width: 8), const Text("Add Counter")])),
-        PopupMenuItem(value: 'backup', child: Row(children: [Icon(PhosphorIcons.floppyDisk(), size: 18), const SizedBox(width: 8), const Text("Backup")])),
-        PopupMenuItem(value: 'restore', child: Row(children: [Icon(PhosphorIcons.uploadSimple(), size: 18), const SizedBox(width: 8), const Text("Restore")])),
-        PopupMenuItem(value: 'rate', child: Row(children: [Icon(PhosphorIcons.star(), size: 18), const SizedBox(width: 8), const Text("Rate Us")])),
-        PopupMenuItem(value: 'about', child: Row(children: [Icon(PhosphorIcons.info(), size: 18), const SizedBox(width: 8), const Text("About Us")])),
-      ],
-    );
-
-    if (!mounted || selected == null) return;
-
-    if (selected == 'settings') {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
-      if (mounted) setState(() {});
-    } else if (selected == 'add') {
-      final name = await _askText("Add counter", hint: "Counter name");
-      if (name != null && name.trim().isNotEmpty) {
-        await cp.addCounter(name.trim());
-        if (mounted) setState(() {});
-      }
-    } else if (selected == 'backup') {
-      final sp = context.read<SettingsProvider>();
-      final path = await BackupService().exportBackup(counters: cp, settings: sp);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Backup saved: $path")));
-    } else if (selected == 'restore') {
-      final data = await BackupService().pickAndReadBackup();
-      if (data == null) return;
-
-      final storeMap = data['store'] as Map<String, dynamic>?;
-      final settingsMap = data['settings'] as Map<String, dynamic>?;
-      if (storeMap == null || settingsMap == null) return;
-
-      final sp = context.read<SettingsProvider>();
-      await cp.importFromMap(storeMap);
-      await sp.importFromMap(settingsMap);
-
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Backup restored successfully")));
-      }
-    } else if (selected == 'rate') {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Thanks for rating us ⭐")));
-    } else if (selected == 'about') {
-      showAboutDialog(context: context, applicationName: "Mantra Jaap Tracker", applicationVersion: "1.0.0");
+    if (!mounted || action == null) return;
+    final (kind, counter) = action;
+    switch (kind) {
+      case 'edit':
+        await _editCounter(counter!);
+      case 'delete':
+        await _deleteCounter(counter!);
+      case 'add':
+        await _createCounter();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final cp = context.watch<CounterProvider>();
-    final settings = context.watch<SettingsProvider>();
-    final cells = _monthCells(_currentMonth);
-    final now = DateTime.now();
-
-    final Color accent = settings.counterAccentColor;
-    final border = Color.lerp(
-      Theme.of(context).colorScheme.outlineVariant,
-      accent,
-      Theme.of(context).brightness == Brightness.dark ? 0.28 : 0.18,
-    )!;
+    final sp = context.watch<SettingsProvider>();
+    final active = cp.activeCounter;
 
     return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: 98,
-        titleSpacing: 12,
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+      body: CustomScrollView(
+        slivers: [
+          AppPageHeader(
+            title: 'Sadhana',
+            leadingMark: ClipRRect(
+              borderRadius: const BorderRadius.all(Radius.circular(8)),
               child: Image.asset(
                 'assets/logo.png',
-                width: 34,
-                height: 34,
+                width: 32,
+                height: 32,
                 fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const Icon(Icons.apps, size: 28),
+                errorBuilder: (_, _, _) => const SizedBox(width: 32, height: 32),
               ),
             ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                "Productive Mantra\nTracker",
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontFamily: "CormorantGaramond",
-                  fontSize: 42,
-                  fontWeight: FontWeight.w600,
-                  height: .9,
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            key: _menuAnchorKey,
-            onPressed: () => _showTopMenu(cp),
-            icon: Icon(PhosphorIcons.dotsThreeOutline(), size: 22),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: StretchingOverscrollIndicator(
-          axisDirection: AxisDirection.down,
-          child: CustomScrollView(
-            physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
-            slivers: [
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 44, 14, 0),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              "One full cycle = ${settings.cycleSize}",
-                              style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: OutlinedButton.icon(
-                              onPressed: () => _showCounterSwitcher(cp),
-                              icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
-                              label: Text(cp.activeCounter?.name ?? "Counter", maxLines: 1, overflow: TextOverflow.ellipsis),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          OutlinedButton(
-                            onPressed: () => setState(() {
-                              _currentMonth = DateTime(_currentMonth.year, _currentMonth.month - 1, 1);
-                            }),
-                            child: const Text("← Prev"),
-                          ),
-                          Expanded(
-                            child: Center(
-                              child: Text(
-                                DateFormat('MMMM yyyy').format(_currentMonth),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontFamily: "CormorantGaramond", fontSize: 30, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ),
-                          OutlinedButton(
-                            onPressed: () => setState(() {
-                              _currentMonth = DateTime(_currentMonth.year, _currentMonth.month + 1, 1);
-                            }),
-                            child: const Text("Next →"),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: const [
-                          _Week("SUN"),
-                          _Week("MON"),
-                          _Week("TUE"),
-                          _Week("WED"),
-                          _Week("THU"),
-                          _Week("FRI"),
-                          _Week("SAT"),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                    ],
-                  ),
-                ),
-              ),
-
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
-                sliver: SliverGrid(
-                  delegate: SliverChildBuilderDelegate(
-                        (context, i) {
-                      final d = cells[i];
-                      if (d == null) return const SizedBox();
-
-                      final day = d;
-                      final iso = _iso(day);
-                      final isToday = day.year == now.year && day.month == now.month && day.day == now.day;
-
-                      final cyclesPerCounter = <MapEntry<int, int>>[];
-                      for (int ci = 0; ci < cp.counters.length; ci++) {
-                        final c = cp.counters[ci];
-                        final full = ((c.countsByDate[iso] ?? 0) ~/ settings.cycleSize);
-                        if (full > 0) cyclesPerCounter.add(MapEntry(ci, full));
-                      }
-
-                      final visibleRows = cyclesPerCounter.take(4).toList();
-                      final hiddenTypeCount = cyclesPerCounter.length - visibleRows.length;
-
-                      return GestureDetector(
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => CounterScreen(date: day)),
-                        ),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: isToday ? accent : border,
-                              width: isToday ? 1.6 : 1.0,
-                            ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                "${day.day}",
-                                style: TextStyle(
-                                  fontFamily: "Inter",
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: isToday ? accent : null,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-
-                              ...visibleRows.map((e) {
-                                final color = _dotPalette[e.key % _dotPalette.length];
-                                final fullCycles = e.value;
-                                final shownDots = fullCycles > 2 ? 2 : fullCycles;
-                                final extra = fullCycles - shownDots;
-
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 2),
-                                  child: Row(
-                                    children: [
-                                      for (int j = 0; j < shownDots; j++)
-                                        Container(
-                                          margin: const EdgeInsets.only(right: 2),
-                                          width: 6.2,
-                                          height: 6.2,
-                                          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                                        ),
-                                      if (extra > 0)
-                                        Flexible(
-                                          child: Text(
-                                            "+$extra",
-                                            maxLines: 1,
-                                            overflow: TextOverflow.clip,
-                                            style: TextStyle(
-                                              fontFamily: "Inter",
-                                              fontSize: 8.8,
-                                              fontWeight: FontWeight.w700,
-                                              color: color,
-                                              height: 1.0,
-                                            ),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                );
-                              }),
-
-                              if (hiddenTypeCount > 0)
-                                Text(
-                                  "+$hiddenTypeCount more",
-                                  style: TextStyle(
-                                    fontFamily: "Inter",
-                                    fontSize: 8.0,
-                                    fontWeight: FontWeight.w600,
-                                    color: Theme.of(context).hintColor,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                    childCount: cells.length,
-                  ),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 7,
-                    crossAxisSpacing: 8,
-                    mainAxisSpacing: 8,
-                    childAspectRatio: 0.68,
-                  ),
-                ),
+            actions: [
+              IconButton(
+                tooltip: 'New counter',
+                onPressed: _createCounter,
+                icon: Icon(Icons.add_rounded),
               ),
             ],
           ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.page, AppSpacing.sm, AppSpacing.page, AppSpacing.xl),
+            sliver: SliverList.list(
+              children: [
+                if (active == null)
+                  _EmptyState(onCreate: _createCounter)
+                else
+                  _TodayCard(
+                    counter: active,
+                    cycleSize: sp.cycleSize,
+                    accent: sp.counterAccentColor,
+                    streak: cp.streak(cycleSize: sp.cycleSize),
+                    onSwitch: _showCounterSwitcher,
+                    onOpen: () => _openDay(today()),
+                    onEdit: () => _editCounter(active),
+                  ),
+                const SizedBox(height: AppSpacing.lg),
+                _CalendarCard(onOpenDay: _openDay),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Today
+
+class _TodayCard extends StatelessWidget {
+  final CounterProfile counter;
+  final int cycleSize;
+  final Color accent;
+  final StreakInfo streak;
+  final VoidCallback onSwitch;
+  final VoidCallback onOpen;
+  final VoidCallback onEdit;
+
+  const _TodayCard({
+    required this.counter,
+    required this.cycleSize,
+    required this.accent,
+    required this.streak,
+    required this.onSwitch,
+    required this.onOpen,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    final count = counter.countsByDate[isoDate(today())] ?? 0;
+    final goal = counter.dailyGoalCycles;
+    final goalChants = goal * cycleSize;
+    final malas = count ~/ cycleSize;
+    final reached = count >= goalChants;
+    final atRisk = streak.current > 0 && !streak.doneToday;
+
+    return Card(
+      child: Padding(
+        padding: AppSpacing.cardPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: onSwitch,
+                    borderRadius: AppRadius.smAll,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              counter.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleLarge,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.xs),
+                          Icon(Icons.expand_more_rounded, size: 16, color: scheme.onSurfaceVariant),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                _StreakPill(streak: streak),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Row(
+              children: [
+                GestureDetector(
+                  onTap: onOpen,
+                  child: ProgressRing(
+                    progress: goalChants == 0 ? 0 : count / goalChants,
+                    color: accent,
+                    size: 104,
+                    strokeWidth: 9,
+                    child: Hero(
+                      tag: CounterAvatar.heroTag(counter.id),
+                      child: CounterAvatar.of(counter, size: 60),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.lg),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        reached ? 'Goal reached today' : 'Today\'s goal',
+                        style: theme.textTheme.titleSmall?.copyWith(color: reached ? accent : scheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$malas of $goal ${goal == 1 ? 'mala' : 'malas'}',
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontFamily: AppFonts.sans,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                          height: 1.2,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        reached ? '$count chants so far' : '${goalChants - count} chants to go',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      if (atRisk) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        Text(
+                          'Finish one mala today to keep your ${streak.current}-day streak.',
+                          style: theme.textTheme.bodySmall?.copyWith(color: scheme.onSurface),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton.icon(
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('Edit'),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton.icon(
+                    onPressed: onOpen,
+                    icon: Icon(Icons.play_arrow_rounded, size: 18),
+                    label: Text(count == 0 ? 'Start chanting' : 'Continue'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _Week extends StatelessWidget {
-  final String t;
-  const _Week(this.t);
+class _StreakPill extends StatelessWidget {
+  final StreakInfo streak;
+  const _StreakPill({required this.streak});
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      t,
-      style: const TextStyle(
-        fontFamily: "Inter",
-        fontSize: 12,
-        letterSpacing: 2.1,
-        fontWeight: FontWeight.w500,
+    final n = streak.current;
+    return Tooltip(
+      message: 'Best streak: ${streak.best} ${streak.best == 1 ? 'day' : 'days'}',
+      child: InfoPill(
+        color: n > 0 ? const Color(0xFFF97316) : Theme.of(context).colorScheme.outline,
+        leading: Text(n > 0 ? '🔥' : '🌱', style: const TextStyle(fontSize: 14, height: 1)),
+        label: n > 0 ? '$n day streak' : 'No streak yet',
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final VoidCallback onCreate;
+  const _EmptyState({required this.onCreate});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.xl),
+        child: Column(
+          children: [
+            CounterAvatar(icon: MantraIcons.byId(MantraIcons.fallbackId), color: theme.colorScheme.primary, size: 72),
+            const SizedBox(height: AppSpacing.lg),
+            Text('Start with your first mantra', textAlign: TextAlign.center, style: theme.textTheme.titleLarge),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'Create a counter to track your daily jaap, set a goal, and build a streak.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            FilledButton.icon(
+              onPressed: onCreate,
+              icon: Icon(Icons.add_rounded),
+              label: const Text('Create counter'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Calendar
+
+class _CalendarCard extends StatefulWidget {
+  final ValueChanged<DateTime> onOpenDay;
+  const _CalendarCard({required this.onOpenDay});
+
+  @override
+  State<_CalendarCard> createState() => _CalendarCardState();
+}
+
+class _CalendarCardState extends State<_CalendarCard> {
+  /// Any day inside the period on screen (a week or a month).
+  DateTime _anchor = today();
+
+  static const _weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  bool _isCurrentPeriod(bool compact) {
+    final now = today();
+    return compact
+        ? startOfWeek(_anchor) == startOfWeek(now)
+        : _anchor.year == now.year && _anchor.month == now.month;
+  }
+
+  void _shift(bool compact, int direction) {
+    setState(() {
+      _anchor = compact
+          ? addDays(_anchor, 7 * direction)
+          : DateTime(_anchor.year, _anchor.month + direction, 1);
+    });
+  }
+
+  void _toggle(SettingsProvider sp) {
+    final toCompact = !sp.calendarCompact;
+    final now = today();
+    // Collapsing onto the current month should land on this week.
+    if (toCompact && _anchor.year == now.year && _anchor.month == now.month) _anchor = now;
+    sp.update(() => sp.calendarCompact = toCompact);
+  }
+
+  String _title(bool compact) {
+    if (!compact) return DateFormat('MMMM yyyy').format(_anchor);
+    final start = startOfWeek(_anchor);
+    final end = addDays(start, 6);
+    if (start.month == end.month) return DateFormat('MMMM yyyy').format(start);
+    if (start.year == end.year) return '${DateFormat('MMM').format(start)} – ${DateFormat('MMM yyyy').format(end)}';
+    return '${DateFormat('MMM yyyy').format(start)} – ${DateFormat('MMM yyyy').format(end)}';
+  }
+
+  List<DateTime?> _cells(bool compact) {
+    if (compact) {
+      final start = startOfWeek(_anchor);
+      return [for (var i = 0; i < 7; i++) addDays(start, i)];
+    }
+    final first = DateTime(_anchor.year, _anchor.month, 1);
+    final daysInMonth = DateTime(_anchor.year, _anchor.month + 1, 0).day;
+    final out = <DateTime?>[
+      for (var i = 0; i < first.weekday % 7; i++) null,
+      for (var d = 1; d <= daysInMonth; d++) DateTime(_anchor.year, _anchor.month, d),
+    ];
+    while (out.length % 7 != 0) {
+      out.add(null);
+    }
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sp = context.watch<SettingsProvider>();
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final compact = sp.calendarCompact;
+    final cells = _cells(compact);
+    final periodKey = compact ? isoDate(startOfWeek(_anchor)) : '${_anchor.year}-${_anchor.month}';
+    final duration = AppMotion.of(context, AppMotion.medium);
+
+    return Card(
+      child: Padding(
+        padding: AppSpacing.cardPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Semantics(
+                    button: true,
+                    label: compact ? 'Show full month' : 'Show this week only',
+                    child: InkWell(
+                      onTap: () => _toggle(sp),
+                      borderRadius: AppRadius.smAll,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                _title(compact),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleLarge,
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.xs),
+                            AnimatedRotation(
+                              turns: compact ? 0 : 0.5,
+                              duration: duration,
+                              curve: AppMotion.standard,
+                              child: Icon(Icons.expand_more_rounded, size: 18),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                AnimatedSwitcher(
+                  duration: duration,
+                  transitionBuilder: (child, a) => FadeTransition(opacity: a, child: ScaleTransition(scale: a, child: child)),
+                  child: _isCurrentPeriod(compact)
+                      ? const SizedBox.shrink()
+                      : IconButton(
+                          tooltip: 'Go to today',
+                          onPressed: () => setState(() => _anchor = today()),
+                          icon: Icon(Icons.today_rounded),
+                        ),
+                ),
+                IconButton(
+                  tooltip: compact ? 'Previous week' : 'Previous month',
+                  onPressed: () => _shift(compact, -1),
+                  icon: Icon(Icons.chevron_left_rounded),
+                ),
+                IconButton(
+                  tooltip: compact ? 'Next week' : 'Next month',
+                  onPressed: () => _shift(compact, 1),
+                  icon: Icon(Icons.chevron_right_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Row(
+              children: [
+                for (final w in _weekdays)
+                  Expanded(
+                    child: Text(
+                      w,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.labelMedium?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            AnimatedSize(
+              duration: duration,
+              curve: AppMotion.enter,
+              alignment: Alignment.topCenter,
+              child: AnimatedSwitcher(
+                duration: duration,
+                switchInCurve: AppMotion.enter,
+                switchOutCurve: AppMotion.exit,
+                layoutBuilder: (current, previous) => Stack(
+                  alignment: Alignment.topCenter,
+                  children: [...previous, ?current],
+                ),
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: ScaleTransition(
+                    scale: Tween<double>(begin: 0.97, end: 1).animate(animation),
+                    alignment: Alignment.topCenter,
+                    child: child,
+                  ),
+                ),
+                child: _DayGrid(
+                  key: ValueKey('$compact-$periodKey'),
+                  cells: cells,
+                  onOpenDay: widget.onOpenDay,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DayGrid extends StatelessWidget {
+  final List<DateTime?> cells;
+  final ValueChanged<DateTime> onOpenDay;
+
+  const _DayGrid({super.key, required this.cells, required this.onOpenDay});
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 7,
+      shrinkWrap: true,
+      padding: EdgeInsets.zero,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: AppSpacing.xs,
+      crossAxisSpacing: AppSpacing.xs,
+      childAspectRatio: 0.78,
+      children: [
+        for (final d in cells) d == null ? const SizedBox.shrink() : _DayCell(day: d, onTap: () => onOpenDay(d)),
+      ],
+    );
+  }
+}
+
+class _DayCell extends StatelessWidget {
+  final DateTime day;
+  final VoidCallback onTap;
+
+  const _DayCell({required this.day, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cp = context.watch<CounterProvider>();
+    final sp = context.watch<SettingsProvider>();
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final accent = sp.counterAccentColor;
+    final onAccent =
+        ThemeData.estimateBrightnessForColor(accent) == Brightness.dark ? Colors.white : Colors.black;
+
+    final key = isoDate(day);
+    final now = today();
+    final isToday = day == now;
+    final isFuture = day.isAfter(now);
+
+    // One dot per counter that completed at least one mala (counter colour).
+    final dots = <Color>[
+      for (final c in cp.counters)
+        if ((c.countsByDate[key] ?? 0) >= sp.cycleSize) c.color,
+    ];
+
+    final active = cp.activeCounter;
+    final goalMet = active != null &&
+        (active.countsByDate[key] ?? 0) >= active.dailyGoalCycles * sp.cycleSize;
+
+    // Today: solid accent circle. Goal met: tinted circle with accent ring.
+    final Color fill;
+    final Color textColor;
+    final BorderSide ring;
+    if (isToday) {
+      fill = accent;
+      textColor = onAccent;
+      ring = BorderSide.none;
+    } else if (goalMet) {
+      fill = accent.withValues(alpha: 0.16);
+      textColor = scheme.onSurface;
+      ring = BorderSide(color: accent, width: 1.5);
+    } else {
+      fill = Colors.transparent;
+      textColor = isFuture ? scheme.onSurfaceVariant.withValues(alpha: 0.5) : scheme.onSurface;
+      ring = BorderSide.none;
+    }
+
+    return Semantics(
+      button: true,
+      label: '${DateFormat('EEEE d MMMM').format(day)}${goalMet ? ', goal reached' : ''}',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final diameter = [constraints.maxWidth, constraints.maxHeight - 10, 40.0].reduce((a, b) => a < b ? a : b);
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              SizedBox.square(
+                dimension: diameter,
+                child: Material(
+                  color: fill,
+                  shape: CircleBorder(side: ring),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onTap,
+                    child: Center(
+                      child: Text(
+                        '${day.day}',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          fontFamily: AppFonts.sans,
+                          fontWeight: isToday || goalMet ? FontWeight.w700 : FontWeight.w500,
+                          color: textColor,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              SizedBox(
+                height: 6,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    for (final color in dots.take(3))
+                      Container(
+                        width: 5,
+                        height: 5,
+                        margin: const EdgeInsets.symmetric(horizontal: 1),
+                        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                      ),
+                    if (dots.length > 3)
+                      Container(
+                        width: 5,
+                        height: 5,
+                        margin: const EdgeInsets.symmetric(horizontal: 1),
+                        decoration: BoxDecoration(color: scheme.onSurfaceVariant, shape: BoxShape.circle),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

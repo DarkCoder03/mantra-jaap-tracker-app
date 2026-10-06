@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/counter_provider.dart';
 import 'providers/settings_provider.dart';
-import 'screens/home_screen.dart';
+import 'screens/app_entry.dart';
+import 'theme/app_theme.dart';
+import 'utils/app_info.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,55 +38,24 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider<SettingsProvider>.value(value: settingsProvider),
         ChangeNotifierProvider<CounterProvider>.value(value: counterProvider),
       ],
-      child: Consumer<SettingsProvider>(
-        builder: (_, settings, __) {
-          final mode = settings.themeMode == AppThemeMode.system
-              ? ThemeMode.system
-              : (settings.themeMode == AppThemeMode.dark ? ThemeMode.dark : ThemeMode.light);
-
-          PageTransitionsTheme transitions = const PageTransitionsTheme(
-            builders: {
-              TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-              TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-              TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-              TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
-              TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
-            },
-          );
-
+      // Rebuild the app (and its themes) only when theme-related settings change.
+      child: Selector<SettingsProvider, (AppThemeMode, String)>(
+        selector: (_, s) => (s.themeMode, s.primaryThemeKey),
+        builder: (context, _, _) {
+          final settings = context.read<SettingsProvider>();
           return MaterialApp(
             debugShowCheckedModeBanner: false,
-            title: 'Mantra Jaap Tracker',
-            themeMode: mode,
-            theme: ThemeData(
-              useMaterial3: true,
-              brightness: Brightness.light,
-              colorSchemeSeed: settings.primaryColor,
-              scaffoldBackgroundColor: const Color(0xFFF7F7F8),
-              fontFamily: 'Inter',
-              pageTransitionsTheme: transitions,
-              splashFactory: InkSparkle.splashFactory,
-              textTheme: const TextTheme(
-                displayLarge: TextStyle(fontFamily: 'CormorantGaramond', fontWeight: FontWeight.w600),
-                headlineLarge: TextStyle(fontFamily: 'CormorantGaramond', fontWeight: FontWeight.w600),
-                titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-              ),
-            ),
-            darkTheme: ThemeData(
-              useMaterial3: true,
+            title: kAppName,
+            themeMode: settings.materialThemeMode,
+            theme: AppTheme.build(brightness: Brightness.light, seed: settings.primaryColor),
+            darkTheme: AppTheme.build(
               brightness: Brightness.dark,
-              colorSchemeSeed: settings.primaryColor,
-              scaffoldBackgroundColor: const Color(0xFF0A0A0B),
-              fontFamily: 'Inter',
-              pageTransitionsTheme: transitions,
-              splashFactory: InkSparkle.splashFactory,
-              textTheme: const TextTheme(
-                displayLarge: TextStyle(fontFamily: 'CormorantGaramond', fontWeight: FontWeight.w600),
-                headlineLarge: TextStyle(fontFamily: 'CormorantGaramond', fontWeight: FontWeight.w600),
-                titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
-              ),
+              seed: settings.primaryColor,
+              amoled: settings.isAmoled,
             ),
-            home: const HomeScreen(),
+            themeAnimationDuration: AppMotion.medium,
+            themeAnimationCurve: AppMotion.standard,
+            home: const AppEntry(),
           );
         },
       ),

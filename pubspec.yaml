@@ -1,8 +1,8 @@
 name: mantra_jaap_tracker
-description: "A new Flutter project."
+description: "Mantra Jaap Tracker: count mantras, track streaks and daily goals."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: ^3.10.8
@@ -18,7 +18,8 @@ dependencies:
   vibration: ^3.1.8
   file_picker: ^10.3.10
   path_provider: ^2.1.5
-  phosphor_flutter: ^2.1.0
+  fl_chart: ^1.1.1
+  wakelock_plus: ^1.3.0
 
 dev_dependencies:
   flutter_test:

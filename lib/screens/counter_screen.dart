@@ -1,10 +1,17 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:vibration/vibration.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../providers/counter_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/sound_service.dart';
+import '../services/volume_key_service.dart';
+import '../theme/app_theme.dart';
+import '../utils/date_utils.dart';
+import '../widgets/app_ui.dart';
+import '../widgets/counter_avatar.dart';
 
 class CounterScreen extends StatefulWidget {
   final DateTime date;
@@ -14,168 +21,168 @@ class CounterScreen extends StatefulWidget {
   State<CounterScreen> createState() => _CounterScreenState();
 }
 
-class _CounterScreenState extends State<CounterScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _glowCtrl;
-  bool _plusPressed = false;
-  bool _showGlow = false;
-  bool _showMinusButton = true;
+class _CounterScreenState extends State<CounterScreen> with SingleTickerProviderStateMixin {
+  late final AnimationController _glow = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  );
+  late final SettingsProvider _settings;
+  StreamSubscription<VolumeKey>? _volumeSub;
+  bool _wakeLockOn = false;
+  bool? _hasVibrator;
+
+  String get _iso => isoDate(widget.date);
+  bool get _isToday => isSameDay(widget.date, DateTime.now());
 
   @override
   void initState() {
     super.initState();
-    _glowCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    );
-    _glowCtrl.addStatusListener((status) {
-      if (status == AnimationStatus.completed && mounted) {
-        setState(() => _showGlow = false);
-      }
-    });
+    _settings = context.read<SettingsProvider>();
+    _settings.addListener(_syncHardware);
+    _syncHardware();
   }
 
   @override
   void dispose() {
-    _glowCtrl.dispose();
+    _settings.removeListener(_syncHardware);
+    _volumeSub?.cancel();
+    if (_wakeLockOn) WakelockPlus.disable();
+    _glow.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final sp = context.read<SettingsProvider>();
-    _showMinusButton = !sp.hideMinusButton;
-  }
+  /// Applies "keep screen on" and "volume button counting" live, so toggling
+  /// them from the options sheet takes effect immediately.
+  void _syncHardware() {
+    final wantWake = _settings.keepScreenOn;
+    if (wantWake != _wakeLockOn) {
+      _wakeLockOn = wantWake;
+      WakelockPlus.toggle(enable: wantWake);
+    }
 
-  String get iso => DateFormat('yyyy-MM-dd').format(widget.date);
-
-  Color _plusColor(String key) {
-    switch (key) {
-      case 'amber':
-        return const Color(0xFFF59E0B);
-      case 'saffron':
-        return const Color(0xFFF97316);
-      case 'lotus':
-        return const Color(0xFFEC4899);
-      case 'peacock':
-        return const Color(0xFF14B8A6);
-      case 'vrindavan':
-        return const Color(0xFF10B981);
-      case 'indigo':
-        return const Color(0xFF6366F1);
-      default:
-        return const Color(0xFFEC4899);
+    final wantVolume = _settings.volumeKeyCounting && VolumeKeyService.isSupported;
+    if (wantVolume && _volumeSub == null) {
+      _volumeSub = VolumeKeyService.events.listen(_onVolumeKey);
+    } else if (!wantVolume && _volumeSub != null) {
+      _volumeSub!.cancel();
+      _volumeSub = null;
     }
   }
 
-  Color _minusColor(String key) {
-    switch (key) {
-      case 'amber':
-        return const Color(0xFFB45309);
-      case 'saffron':
-        return const Color(0xFFC2410C);
-      case 'lotus':
-        return const Color(0xFFBE185D);
-      case 'peacock':
-        return const Color(0xFF0F766E);
-      case 'vrindavan':
-        return const Color(0xFF047857);
-      case 'indigo':
-        return const Color(0xFF4338CA);
-      default:
-        return const Color(0xFFBE185D);
+  void _onVolumeKey(VolumeKey key) {
+    // Ignore presses while a sheet or dialog is open on top of the counter.
+    if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? false)) return;
+    key == VolumeKey.up ? _increment() : _decrement();
+  }
+
+  Future<void> _vibrate({int? duration, List<int>? pattern}) async {
+    _hasVibrator ??= await Vibration.hasVibrator();
+    if (_hasVibrator != true) return;
+    if (pattern != null) {
+      Vibration.vibrate(pattern: pattern);
+    } else {
+      Vibration.vibrate(duration: duration ?? 12);
     }
   }
 
-  Future<void> _increment(CounterProvider cp, SettingsProvider sp) async {
-    final before = cp.countForDate(iso);
-    await cp.increment(iso);
-    final after = cp.countForDate(iso);
+  Future<void> _increment() async {
+    final cp = context.read<CounterProvider>();
+    final counter = cp.activeCounter;
+    if (counter == null) return;
 
-    if (sp.regularHaptic) {
-      final has = await Vibration.hasVibrator() ?? false;
-      if (has) Vibration.vibrate(duration: 12);
-    }
+    final after = cp.countForDate(_iso) + 1;
+    await cp.increment(_iso);
 
-    final completedNow = (after % sp.cycleSize == 0) && (after != before);
-    if (completedNow) {
-      if (mounted) setState(() => _showGlow = true);
-      _glowCtrl.forward(from: 0);
+    if (_settings.regularHaptic) _vibrate(duration: 12);
 
-      if (sp.soundAlert) await SoundService().playByType(sp.soundType);
+    if (after % _settings.cycleSize != 0) return;
 
-      if (sp.longHaptic) {
-        final has = await Vibration.hasVibrator() ?? false;
-        if (has) Vibration.vibrate(pattern: [0, 65, 35, 110]);
-      }
+    // A mala was just completed.
+    _glow.forward(from: 0);
+    if (_settings.soundAlert) SoundService().playByType(_settings.soundType);
+    if (_settings.longHaptic) _vibrate(pattern: [0, 65, 35, 110]);
+
+    final malas = after ~/ _settings.cycleSize;
+    if (mounted && malas == counter.dailyGoalCycles) {
+      showAppSnackBar(
+        context,
+        _isToday
+            ? 'Daily goal reached: $malas ${malas == 1 ? 'mala' : 'malas'} today.'
+            : 'Goal reached for this day.',
+      );
     }
   }
 
-  Future<void> _openUnifiedGearMenu(SettingsProvider sp) async {
-    await showModalBottomSheet(
+  Future<void> _decrement() async {
+    await context.read<CounterProvider>().decrement(_iso);
+    if (_settings.regularHaptic) _vibrate(duration: 8);
+  }
+
+  Future<void> _confirmReset(String counterName, String dayLabel) async {
+    final cp = context.read<CounterProvider>();
+    final ok = await showConfirmDialog(
+      context,
+      title: 'Reset this day?',
+      message: '$counterName on $dayLabel goes back to zero.',
+      confirmLabel: 'Reset',
+      destructive: true,
+    );
+    if (ok) await cp.resetDay(_iso);
+  }
+
+  Future<void> _openOptions() async {
+    await showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: StatefulBuilder(
-          builder: (ctx, setSheet) {
-            return ListView(
-              shrinkWrap: true,
-              children: [
-                SwitchListTile(
-                  title: const Text("Show minus button"),
-                  value: _showMinusButton,
-                  onChanged: (v) async {
-                    setState(() => _showMinusButton = v);
-                    await sp.update(() => sp.hideMinusButton = !v);
-                    setSheet(() {});
-                  },
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  title: const Text("Counter colour"),
-                  trailing: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      value: sp.counterColorKey,
-                      icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                      onChanged: (v) async {
-                        if (v == null) return;
-                        await sp.update(() => sp.counterColorKey = v);
-                        setSheet(() {});
-                        if (mounted) setState(() {});
-                      },
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'amber',
-                          child: Text('Kesari (Amber)'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'saffron',
-                          child: Text('Saffron'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'lotus',
-                          child: Text('Lotus Pink'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'peacock',
-                          child: Text('Peacock Teal'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'vrindavan',
-                          child: Text('Vrindavan Green'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'indigo',
-                          child: Text('Krishna Indigo'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (ctx) => Consumer<SettingsProvider>(
+        builder: (ctx, sp, _) => SheetScaffold(
+          title: 'Counter options',
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+                secondary: const Icon(Icons.remove_rounded),
+                title: const Text('Show minus button'),
+                subtitle: Text(sp.hideMinusButton ? 'Tap anywhere on the screen to count' : 'Shown next to the plus button'),
+                value: !sp.hideMinusButton,
+                onChanged: (v) => sp.update(() => sp.hideMinusButton = !v),
+              ),
+              SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+                secondary: const Icon(Icons.volume_up_outlined),
+                title: const Text('Count with volume buttons'),
+                subtitle: Text(VolumeKeyService.isSupported ? 'Up adds one, down removes one' : 'Available on Android'),
+                value: sp.volumeKeyCounting && VolumeKeyService.isSupported,
+                onChanged: VolumeKeyService.isSupported ? (v) => sp.update(() => sp.volumeKeyCounting = v) : null,
+              ),
+              SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+                secondary: const Icon(Icons.light_mode_outlined),
+                title: const Text('Keep screen on'),
+                subtitle: const Text('While this screen is open'),
+                value: sp.keepScreenOn,
+                onChanged: (v) => sp.update(() => sp.keepScreenOn = v),
+              ),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('Button colour'),
+                subtitle: Text(SettingsProvider.labelFor(SettingsProvider.counterColorOptions, sp.counterColorKey)),
+                trailing: ColorDot(sp.counterAccentColor),
+                onTap: () async {
+                  final v = await showChoiceSheet(
+                    ctx,
+                    title: 'Button colour',
+                    options: SettingsProvider.counterColorOptions,
+                    selected: sp.counterColorKey,
+                  );
+                  if (v != null) sp.update(() => sp.counterColorKey = v);
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -185,193 +192,234 @@ class _CounterScreenState extends State<CounterScreen>
   Widget build(BuildContext context) {
     final cp = context.watch<CounterProvider>();
     final sp = context.watch<SettingsProvider>();
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final counter = cp.activeCounter;
+    final dayLabel = _isToday ? 'today' : DateFormat('EEE, d MMM y').format(widget.date);
 
-    final extShowMinus = !sp.hideMinusButton;
-    if (extShowMinus != _showMinusButton) _showMinusButton = extShowMinus;
+    if (counter == null) {
+      return Scaffold(
+        appBar: AppBar(),
+        body: const Center(child: Text('Create a counter on the Home tab first.')),
+      );
+    }
 
-    final count = cp.countForDate(iso);
-    final cycleProgress = count % sp.cycleSize;
-    final completed = count ~/ sp.cycleSize;
-    final plus = _plusColor(sp.counterColorKey);
-    final minus = _minusColor(sp.counterColorKey);
-    final dateLabel = DateFormat('EEEE, MMM d, y').format(widget.date);
-
-    final coreCenter = Column(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(
-          dateLabel,
-          style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          "Total: $count",
-          style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          cp.activeCounter?.name ?? "-",
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontFamily: "CormorantGaramond",
-            fontSize: 52,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          "Cycle: $cycleProgress / ${sp.cycleSize} • Completed: $completed",
-          style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
-        ),
-        const SizedBox(height: 10),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 120),
-          child: Text(
-            "$cycleProgress",
-            key: ValueKey(cycleProgress),
-            style: const TextStyle(
-              fontFamily: "Inter",
-              fontSize: 102,
-              fontWeight: FontWeight.w400,
-              height: 0.95,
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        if (_showMinusButton)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _RoundAction(
-                size: 72,
-                color: minus,
-                text: "−",
-                textSize: 38,
-                onTap: () => cp.decrement(iso),
-              ),
-              const SizedBox(width: 16),
-              AnimatedScale(
-                scale: _plusPressed ? .96 : 1,
-                duration: const Duration(milliseconds: 70),
-                child: _RoundAction(
-                  size: 134,
-                  color: plus,
-                  text: "+",
-                  textSize: 56,
-                  shadow: 10,
-                  onTap: () async {
-                    setState(() => _plusPressed = true);
-                    await _increment(cp, sp);
-                    await Future.delayed(const Duration(milliseconds: 60));
-                    if (mounted) setState(() => _plusPressed = false);
-                  },
-                ),
-              ),
-            ],
-          )
-        else
-          AnimatedScale(
-            scale: _plusPressed ? .96 : 1,
-            duration: const Duration(milliseconds: 70),
-            child: _RoundAction(
-              size: 160,
-              color: plus,
-              text: "+",
-              textSize: 62,
-              shadow: 12,
-              onTap: () async {
-                setState(() => _plusPressed = true);
-                await _increment(cp, sp);
-                await Future.delayed(const Duration(milliseconds: 60));
-                if (mounted) setState(() => _plusPressed = false);
-              },
-            ),
-          ),
-      ],
+    final accent = sp.counterAccentColor;
+    final count = cp.countForDate(_iso);
+    final inCycle = count % sp.cycleSize;
+    final malas = count ~/ sp.cycleSize;
+    final goal = counter.dailyGoalCycles;
+    final showMinus = !sp.hideMinusButton;
+    final volumeActive = sp.volumeKeyCounting && VolumeKeyService.isSupported;
+    final hint = theme.textTheme.bodyMedium?.copyWith(
+      color: scheme.onSurfaceVariant,
+      fontFeatures: const [FontFeature.tabularFigures()],
     );
 
-    Widget centerArea = Expanded(child: Center(child: coreCenter));
-
-    if (!_showMinusButton) {
-      centerArea = Expanded(
-        child: Stack(
+    // v1 layout: info and the big number in the middle, buttons below.
+    final center = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(DateFormat('EEEE, d MMM y').format(widget.date), style: hint),
+        const SizedBox(height: 2),
+        Text('Total: $count', style: hint),
+        const SizedBox(height: AppSpacing.md),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Center(child: coreCenter),
-            Positioned.fill(
-              top: MediaQuery.of(context).size.height * 0.5,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () async => _increment(cp, sp),
-                child: const SizedBox.expand(),
+            Hero(
+              tag: CounterAvatar.heroTag(counter.id),
+              child: CounterAvatar.of(counter, size: 44),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Flexible(
+              child: Text(
+                counter.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.displayMedium,
               ),
             ),
           ],
         ),
-      );
-    }
+        const SizedBox(height: AppSpacing.sm),
+        // Mala, completed and goal together; the goal lights up once reached.
+        Text.rich(
+          TextSpan(
+            style: hint,
+            children: [
+              TextSpan(text: 'Mala: $inCycle / ${sp.cycleSize}  •  Completed: $malas  •  '),
+              TextSpan(
+                text: 'Goal: $goal',
+                style: malas >= goal ? TextStyle(color: accent, fontWeight: FontWeight.w600) : null,
+              ),
+            ],
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: AnimatedSwitcher(
+            duration: AppMotion.of(context, AppMotion.fast),
+            transitionBuilder: (child, a) => FadeTransition(
+              opacity: a,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.9, end: 1).animate(a),
+                child: child,
+              ),
+            ),
+            child: Text(
+              '$inCycle',
+              key: ValueKey(count),
+              style: const TextStyle(
+                fontFamily: AppFonts.sans,
+                fontSize: 132,
+                fontWeight: FontWeight.w700,
+                height: 1.0,
+                letterSpacing: -4,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
 
     return Scaffold(
-      body: AnimatedBuilder(
-        animation: _glowCtrl,
-        builder: (_, __) {
-          final t = Curves.easeOutCubic.transform(_glowCtrl.value);
-          final op = (1 - t) * 0.38;
-          final r = 0.90 + (t * 0.45);
-
-          return Stack(
-            children: [
-              if (_showGlow)
-                Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: RadialGradient(
-                        center: const Alignment(0, 0.05),
-                        radius: r,
-                        colors: [
-                          plus.withOpacity(op),
-                          plus.withOpacity(op * 0.16),
-                          Colors.transparent,
-                        ],
-                        stops: const [0, .58, 1],
+      body: Stack(
+        children: [
+          Positioned.fill(child: _CompletionGlow(animation: _glow, color: accent)),
+          SafeArea(
+            child: Column(
+              children: [
+                // Top bar (v1 style): Back on the left, options and Reset on the right.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+                  child: Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.maybePop(context),
+                        icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                        label: const Text('Back'),
+                      ),
+                      const Spacer(),
+                      IconButton.outlined(
+                        tooltip: 'Counter options',
+                        onPressed: _openOptions,
+                        icon: const Icon(Icons.tune_rounded),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      FilledButton.tonal(
+                        onPressed: () => _confirmReset(counter.name, dayLabel),
+                        child: const Text('Reset'),
+                      ),
+                    ],
+                  ),
+                ),
+                // With the minus button hidden, the whole middle area counts on tap.
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: showMinus ? null : _increment,
+                    child: Padding(
+                      padding: AppSpacing.pagePadding,
+                      // Shrinks to fit on short screens instead of overflowing.
+                      child: LayoutBuilder(
+                        builder: (context, constraints) => Center(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: SizedBox(width: constraints.maxWidth, child: center),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              SafeArea(
-                child: Column(
+                const SizedBox(height: AppSpacing.lg),
+                // Three equal slots keep the + button exactly centred,
+                // whether or not the minus button is shown.
+                Row(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                      child: Row(
-                        children: [
-                          OutlinedButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text("← Back"),
-                          ),
-                          const Spacer(),
-                          OutlinedButton.icon(
-                            onPressed: () => _openUnifiedGearMenu(sp),
-                            icon: const Icon(Icons.settings_outlined, size: 18),
-                            label: const Icon(
-                              Icons.keyboard_arrow_down_rounded,
-                              size: 18,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton(
-                            onPressed: () => cp.resetDay(iso),
-                            child: const Text("Reset"),
-                          ),
-                        ],
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.center,
+                        child: showMinus
+                            ? _RoundAction(
+                                size: 68,
+                                color: sp.counterAccentDeep,
+                                icon: Icons.remove_rounded,
+                                semanticLabel: 'Remove one',
+                                onTap: _decrement,
+                              )
+                            : const SizedBox.shrink(),
                       ),
                     ),
-                    centerArea,
+                    _RoundAction(
+                      size: showMinus ? 150 : 168,
+                      color: accent,
+                      icon: Icons.add_rounded,
+                      semanticLabel: 'Add one',
+                      elevation: 8,
+                      onTap: _increment,
+                    ),
+                    const Expanded(child: SizedBox.shrink()),
                   ],
                 ),
+                const SizedBox(height: AppSpacing.md),
+                SizedBox(
+                  height: 20,
+                  child: AnimatedSwitcher(
+                    duration: AppMotion.of(context, AppMotion.fast),
+                    child: Text(
+                      volumeActive
+                          ? 'Volume buttons are counting'
+                          : (showMinus ? '' : 'Tap anywhere to count'),
+                      key: ValueKey('$volumeActive-$showMinus'),
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Soft radial bloom after each completed mala.
+class _CompletionGlow extends StatelessWidget {
+  final Animation<double> animation;
+  final Color color;
+
+  const _CompletionGlow({required this.animation, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: animation,
+        builder: (_, _) {
+          final v = animation.value;
+          if (v == 0 || v == 1) return const SizedBox.shrink();
+          final t = Curves.easeOutCubic.transform(v);
+          final opacity = (1 - t) * 0.38;
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: const Alignment(0, 0.05),
+                radius: 0.9 + t * 0.45,
+                colors: [
+                  color.withValues(alpha: opacity),
+                  color.withValues(alpha: opacity * 0.16),
+                  Colors.transparent,
+                ],
+                stops: const [0, .58, 1],
               ),
-            ],
+            ),
           );
         },
       ),
@@ -379,43 +427,56 @@ class _CounterScreenState extends State<CounterScreen>
   }
 }
 
-class _RoundAction extends StatelessWidget {
+class _RoundAction extends StatefulWidget {
   final double size;
   final Color color;
-  final String text;
-  final double textSize;
-  final double shadow;
+  final IconData icon;
+  final String semanticLabel;
+  final double elevation;
   final VoidCallback onTap;
 
   const _RoundAction({
     required this.size,
     required this.color,
-    required this.text,
-    required this.textSize,
-    this.shadow = 10,
+    required this.icon,
+    required this.semanticLabel,
     required this.onTap,
+    this.elevation = 2,
   });
 
   @override
+  State<_RoundAction> createState() => _RoundActionState();
+}
+
+class _RoundActionState extends State<_RoundAction> {
+  bool _pressed = false;
+
+  void _set(bool v) {
+    if (_pressed != v) setState(() => _pressed = v);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: color,
-      elevation: shadow,
-      borderRadius: BorderRadius.circular(size / 2),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(size / 2),
-        onTap: onTap,
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: Center(
-            child: Text(
-              text,
-              style: TextStyle(
-                fontSize: textSize,
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-              ),
+    final onColor = ThemeData.estimateBrightnessForColor(widget.color) == Brightness.dark ? Colors.white : Colors.black;
+    return Semantics(
+      button: true,
+      label: widget.semanticLabel,
+      child: AnimatedScale(
+        scale: _pressed ? 0.94 : 1,
+        duration: const Duration(milliseconds: 80),
+        child: Material(
+          color: widget.color,
+          elevation: widget.elevation,
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: widget.onTap,
+            onTapDown: (_) => _set(true),
+            onTapUp: (_) => _set(false),
+            onTapCancel: () => _set(false),
+            child: SizedBox.square(
+              dimension: widget.size,
+              child: Icon(widget.icon, size: widget.size * 0.42, color: onColor),
             ),
           ),
         ),

@@ -7,19 +7,23 @@ class SoundService {
 
   final AudioPlayer _player = AudioPlayer();
 
-  Future<void> playByType(String type) async {
-    final file = switch (type) {
-      'bell' => 'bell.mp3',
-      'chime' => 'chime.mp3',
-      'mantra' => 'mantra.mp3',
-      'conch' => 'conch.mp3',
-      'damru' => 'damru.mp3',
-      'ghanta' => 'ghanta.mp3',
-      'flute' => 'flute.mp3',
-      _ => 'bell.mp3',
-    };
+  /// Only files that exist in assets/sounds/ are listed; unknown types fall
+  /// back to the bell instead of failing silently.
+  static const Map<String, String> _files = {
+    'bell': 'bell.mp3',
+    'chime': 'chime.mp3',
+    'ghanta': 'ghanta.mp3',
+    'damru': 'drum.mp3',
+    'flute': 'flute.mp3',
+  };
 
-    await _player.stop();
-    await _player.play(AssetSource('sounds/$file'));
+  Future<void> playByType(String type) async {
+    final file = _files[type] ?? _files['bell']!;
+    try {
+      await _player.stop();
+      await _player.play(AssetSource('sounds/$file'));
+    } catch (_) {
+      // Audio focus or decoder errors must never interrupt counting.
+    }
   }
 }
