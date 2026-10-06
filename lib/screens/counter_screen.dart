@@ -14,7 +14,8 @@ class CounterScreen extends StatefulWidget {
   State<CounterScreen> createState() => _CounterScreenState();
 }
 
-class _CounterScreenState extends State<CounterScreen> with SingleTickerProviderStateMixin {
+class _CounterScreenState extends State<CounterScreen>
+    with SingleTickerProviderStateMixin {
   late AnimationController _glowCtrl;
   bool _plusPressed = false;
   bool _showGlow = false;
@@ -23,7 +24,10 @@ class _CounterScreenState extends State<CounterScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    _glowCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+    _glowCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    );
     _glowCtrl.addStatusListener((status) {
       if (status == AnimationStatus.completed && mounted) {
         setState(() => _showGlow = false);
@@ -141,12 +145,30 @@ class _CounterScreenState extends State<CounterScreen> with SingleTickerProvider
                         if (mounted) setState(() {});
                       },
                       items: const [
-                        DropdownMenuItem(value: 'amber', child: Text('Kesari (Amber)')),
-                        DropdownMenuItem(value: 'saffron', child: Text('Saffron')),
-                        DropdownMenuItem(value: 'lotus', child: Text('Lotus Pink')),
-                        DropdownMenuItem(value: 'peacock', child: Text('Peacock Teal')),
-                        DropdownMenuItem(value: 'vrindavan', child: Text('Vrindavan Green')),
-                        DropdownMenuItem(value: 'indigo', child: Text('Krishna Indigo')),
+                        DropdownMenuItem(
+                          value: 'amber',
+                          child: Text('Kesari (Amber)'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'saffron',
+                          child: Text('Saffron'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'lotus',
+                          child: Text('Lotus Pink'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'peacock',
+                          child: Text('Peacock Teal'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'vrindavan',
+                          child: Text('Vrindavan Green'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'indigo',
+                          child: Text('Krishna Indigo'),
+                        ),
                       ],
                     ),
                   ),
@@ -178,26 +200,43 @@ class _CounterScreenState extends State<CounterScreen> with SingleTickerProvider
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(dateLabel, style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor)),
+        Text(
+          dateLabel,
+          style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
+        ),
         const SizedBox(height: 2),
-        Text("Total: $count", style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor)),
+        Text(
+          "Total: $count",
+          style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
+        ),
         const SizedBox(height: 12),
         Text(
           cp.activeCounter?.name ?? "-",
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontFamily: "CormorantGaramond", fontSize: 52, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+            fontFamily: "CormorantGaramond",
+            fontSize: 52,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         const SizedBox(height: 6),
-        Text("Cycle: $cycleProgress / ${sp.cycleSize} • Completed: $completed",
-            style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor)),
+        Text(
+          "Cycle: $cycleProgress / ${sp.cycleSize} • Completed: $completed",
+          style: TextStyle(fontSize: 15, color: Theme.of(context).hintColor),
+        ),
         const SizedBox(height: 10),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 120),
           child: Text(
             "$cycleProgress",
             key: ValueKey(cycleProgress),
-            style: const TextStyle(fontFamily: "Inter", fontSize: 102, fontWeight: FontWeight.w400, height: 0.95),
+            style: const TextStyle(
+              fontFamily: "Inter",
+              fontSize: 102,
+              fontWeight: FontWeight.w400,
+              height: 0.95,
+            ),
           ),
         ),
         const SizedBox(height: 24),
@@ -205,7 +244,13 @@ class _CounterScreenState extends State<CounterScreen> with SingleTickerProvider
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _RoundAction(size: 72, color: minus, text: "−", textSize: 38, onTap: () => cp.decrement(iso)),
+              _RoundAction(
+                size: 72,
+                color: minus,
+                text: "−",
+                textSize: 38,
+                onTap: () => cp.decrement(iso),
+              ),
               const SizedBox(width: 16),
               AnimatedScale(
                 scale: _plusPressed ? .96 : 1,
@@ -284,7 +329,11 @@ class _CounterScreenState extends State<CounterScreen> with SingleTickerProvider
                       gradient: RadialGradient(
                         center: const Alignment(0, 0.05),
                         radius: r,
-                        colors: [plus.withOpacity(op), plus.withOpacity(op * 0.16), Colors.transparent],
+                        colors: [
+                          plus.withOpacity(op),
+                          plus.withOpacity(op * 0.16),
+                          Colors.transparent,
+                        ],
                         stops: const [0, .58, 1],
                       ),
                     ),
@@ -297,15 +346,24 @@ class _CounterScreenState extends State<CounterScreen> with SingleTickerProvider
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                       child: Row(
                         children: [
-                          OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text("← Back")),
+                          OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text("← Back"),
+                          ),
                           const Spacer(),
                           OutlinedButton.icon(
                             onPressed: () => _openUnifiedGearMenu(sp),
                             icon: const Icon(Icons.settings_outlined, size: 18),
-                            label: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+                            label: const Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 18,
+                            ),
                           ),
                           const SizedBox(width: 8),
-                          FilledButton(onPressed: () => cp.resetDay(iso), child: const Text("Reset")),
+                          FilledButton(
+                            onPressed: () => cp.resetDay(iso),
+                            child: const Text("Reset"),
+                          ),
                         ],
                       ),
                     ),
@@ -351,7 +409,14 @@ class _RoundAction extends StatelessWidget {
           width: size,
           height: size,
           child: Center(
-            child: Text(text, style: TextStyle(fontSize: textSize, color: Colors.white, fontWeight: FontWeight.w600)),
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: textSize,
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ),
       ),
